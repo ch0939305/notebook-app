@@ -270,11 +270,10 @@ async function saveNote() {
   let image = null, pdf = null;
   try {
     if (imgInput.files[0]) {
-      // 圖片先壓縮再轉 PDF
+      // 圖片壓縮（自動 resize + JPEG 壓縮）
       const rawDataUrl = await fileToDataURL(imgInput.files[0]);
-      image = await imageToCompressedPdf(rawDataUrl);
+      image = await compressImage(rawDataUrl);
     } else if (pendingImage) {
-      // 保留既有圖片（已轉好的 PDF）
       image = pendingImage;
     }
     if (pdfInput.files[0]) {
@@ -296,45 +295,19 @@ async function saveNote() {
   toast(editing ? '已更新' : '已新增');
 }
 
-// 圖片壓縮 + 轉 PDF（用 jsPDF）
-async function imageToCompressedPdf(dataUrl, maxW = 1200) {
+// 圖片壓縮（最大 1200px, JPEG 0.7）
+async function compressImage(dataUrl, maxW = 1200) {
   return new Promise((resolve) => {
     const img = new Image();
-    img.onload = async () => {
-      // 計算縮放
+    img.onload = () => {
       let w = img.width, h = img.height;
       if (w > maxW) { h = h * maxW / w; w = maxW; }
       if (h > maxW * 1.5) { w = w * maxW * 1.5 / h; h = maxW * 1.5; }
-      // 畫到 canvas 壓縮
       const c = document.createElement('canvas');
       c.width = w; c.height = h;
       const ctx = c.getContext('2d');
       ctx.drawImage(img, 0, 0, w, h);
-      const compressed = c.toDataURL('image/jpeg', 0.7);
-      // 用 jsPDF 建立 PDF
-      try {
-        const { jsPDF } = window.jspdf;
-        const pdf = new jsPDF('p', 'mm', 'a4');
-        const pageW = 210, pageH = 297;
-        const margin = 15;
-        const maxPw = pageW - margin * 2;
-        const maxPh = pageH - margin * 2;
-        let pw = w, ph = h;
-        const dpi = 72;
-        pw = pw * 25.4 / dpi;
-        ph = ph * 25.4 / dpi;
-        if (pw > maxPw) { ph = ph * maxPw / pw; pw = maxPw; }
-        if (ph > maxPh) { pw = pw * maxPh / ph; ph = maxPh; }
-        const x = (pageW - pw) / 2;
-        const y = (pageH - ph) / 2;
-        pdf.addImage(compressed, 'JPEG', x, y, pw, ph);
-        const pdfData = pdf.output('datauristring');
-        resolve(pdfData);
-      } catch (e) {
-        // jsPDF 未載入，回傳壓縮後的 JPEG
-        console.warn('jsPDF 未載入，以壓縮圖片替代', e);
-        resolve(compressed);
-      }
+      resolve(c.toDataURL('image/jpeg', 0.7));
     };
     img.onerror = () => resolve(dataUrl);
     img.src = dataUrl;
