@@ -155,15 +155,12 @@ function bindAppEvents() {
   });
   $('note-form').addEventListener('submit', (e) => { e.preventDefault(); saveNote(); });
 
-  $('note-image').addEventListener('change', (e) => {
+  $('note-image').addEventListener('change', async (e) => {
     const f = e.target.files[0];
     if (!f) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      $('image-preview').src = ev.target.result;
-      $('image-preview-wrap').classList.remove('hidden');
-    };
-    reader.readAsDataURL(f);
+    // 預覽原圖
+    $('image-preview').src = URL.createObjectURL(f);
+    $('image-preview-wrap').classList.remove('hidden');
   });
 
   $('note-pdf').addEventListener('change', (e) => {
@@ -269,12 +266,26 @@ async function saveNote() {
 
   const imgInput = $('note-image');
   const pdfInput = $('note-pdf');
-  const imgP = imgInput.files[0] ? fileToDataURL(imgInput.files[0]) : Promise.resolve(pendingImage);
-  const pdfP = pdfInput.files[0] ? fileToDataURL(pdfInput.files[0]) : Promise.resolve(pendingPdf);
 
-  let image, pdf;
-  try { [image, pdf] = await Promise.all([imgP, pdfP]); }
-  catch { toast('檔案處理失敗，已忽略附件'); image = null; pdf = null; }
+  let image = null, pdf = null;
+  try {
+    if (imgInput.files[0]) {
+      // 圖片先壓縮再轉 PDF
+      const rawDataUrl = await fileToDataURL(imgInput.files[0]);
+      image = await imageToCompressedPdf(rawDataUrl);
+    } else if (pendingImage) {
+      // 保留既有圖片（已轉好的 PDF）
+      image = pendingImage;
+    }
+    if (pdfInput.files[0]) {
+      pdf = await fileToDataURL(pdfInput.files[0]);
+    } else if (pendingPdf) {
+      pdf = pendingPdf;
+    }
+  } catch (e) {
+    toast('檔案處理失敗，已忽略附件');
+    image = null; pdf = null;
+  }
 
   const now = Date.now();
   const editing = !!state.editingId;
@@ -283,6 +294,51 @@ async function saveNote() {
   await cloudSync();
   closeModal();
   toast(editing ? '已更新' : '已新增');
+}
+
+// 圖片壓縮 + 轉 PDF（用 jsPDF）
+async function imageToCompressedPdf(dataUrl, maxW = 1200) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = async () => {
+      // 計算縮放
+      let w = img.width, h = img.height;
+      if (w > maxW) { h = h * maxW / w; w = maxW; }
+      if (h > maxW * 1.5) { w = w * maxW * 1.5 / h; h = maxW * 1.5; }
+      // 畫到 canvas 壓縮
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      const ctx = c.getContext('2d');
+      ctx.drawImage(img, 0, 0, w, h);
+      const compressed = c.toDataURL('image/jpeg', 0.7);
+      // 用 jsPDF 建立 PDF
+      try {
+        const { jsPDF } = window.jspdf;
+        const pdf = new jsPDF('p', 'mm', 'a4');
+        const pageW = 210, pageH = 297;
+        const margin = 15;
+        const maxPw = pageW - margin * 2;
+        const maxPh = pageH - margin * 2;
+        let pw = w, ph = h;
+        const dpi = 72;
+        pw = pw * 25.4 / dpi;
+        ph = ph * 25.4 / dpi;
+        if (pw > maxPw) { ph = ph * maxPw / pw; pw = maxPw; }
+        if (ph > maxPh) { pw = pw * maxPh / ph; ph = maxPh; }
+        const x = (pageW - pw) / 2;
+        const y = (pageH - ph) / 2;
+        pdf.addImage(compressed, 'JPEG', x, y, pw, ph);
+        const pdfData = pdf.output('datauristring');
+        resolve(pdfData);
+      } catch (e) {
+        // jsPDF 未載入，回傳壓縮後的 JPEG
+        console.warn('jsPDF 未載入，以壓縮圖片替代', e);
+        resolve(compressed);
+      }
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
 }
 
 // 本機儲存（離線 / fallback）
