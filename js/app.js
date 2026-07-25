@@ -11,32 +11,21 @@ const LS_THEME = 'notebook:theme';
 const LS_USER = 'notebook:user';
 const LS_ACCT = 'notebook:accounts'; // 本機帳號（測試用）
 
-// 偵測是否已設定真實 Supabase（仍是預設佔位字串則視為未設定）
-const hasSupabase = (typeof SUPABASE_URL !== 'undefined')
+// 偵測是否已設定 Supabase
+const hasCloudDB = (typeof SUPABASE_URL !== 'undefined')
   && SUPABASE_URL
   && !SUPABASE_URL.includes('your-project')
   && (typeof SUPABASE_ANON_KEY !== 'undefined')
   && SUPABASE_ANON_KEY
   && !SUPABASE_ANON_KEY.includes('your-anon-key');
 
-let supa = null;
-if (hasSupabase && window.supabase) {
-  try {
-    supa = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-      auth: { persistSession: true, autoRefreshToken: true }
-    });
-  } catch (e) {
-    console.warn('Supabase 初始化失敗，改用本機模式：', e.message);
-  }
-}
-const useLocal = !supa;
+let cloudRowId = null;
 
 // 分類對照
 const CAT_LABELS = { personal: '個人', company: '公司', computer: '電腦', stocks: '股票' };
 
-// 目前使用者（雲端模式含 id；本機模式只有 email）
+// 目前使用者
 let currentUser = null;
-let realtimeChannel = null;
 
 // ---------- 工具函式 ----------
 const $ = (id) => document.getElementById(id);
@@ -66,29 +55,46 @@ function writeNotes(arr) {
   }
 }
 
-// 雲端列 ↔ 本機物件轉換
-const mapFromRow = (r) => ({
-  id: r.id,
-  user_id: r.user_id,
-  title: r.title || '',
-  category: r.category || 'personal',
-  content: r.content || '',
-  image: r.image || null,
-  pdf: r.pdf || null,
-  createdAt: r.created_at ? new Date(r.created_at).getTime() : Date.now(),
-  updatedAt: r.updated_at ? new Date(r.updated_at).getTime() : Date.now()
-});
-const mapToRow = (n) => ({
-  id: n.id,
-  user_id: currentUser?.id || null,
-  title: n.title,
-  category: n.category,
-  content: n.content,
-  image: n.image,
-  pdf: n.pdf,
-  created_at: new Date(n.createdAt).toISOString(),
-  updated_at: new Date(n.updatedAt).toISOString()
-});
+// 雲端工具函式
+async function cloudFetch(path, opts = {}) {
+  if (!hasCloudDB) return null;
+  const headers = { 'apikey': SUPABASE_ANON_KEY, ...opts.headers };
+  try {
+    const res = await fetch(SUPABASE_URL + path, { ...opts, headers });
+    if (!res.ok) return null;
+    if (res.status === 204) return true;
+    return await res.json();
+  } catch { return null; }
+}
+
+async function loadFromCloud() {
+  if (!hasCloudDB) return null;
+  const data = await cloudFetch(`/rest/v1/${STORAGE_TABLE}?select=id,data&data->key=eq.${STORAGE_KEY}`);
+  if (!data || data.length === 0) return null;
+  cloudRowId = data[0].id;
+  return data[0].data?.notes || null;
+}
+
+async function saveToCloud(notes) {
+  if (!hasCloudDB) return false;
+  const payload = { data: { key: STORAGE_KEY, notes } };
+  if (cloudRowId) {
+    const ok = await cloudFetch(`/rest/v1/${STORAGE_TABLE}?id=eq.${cloudRowId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    return ok !== null;
+  } else {
+    const result = await cloudFetch(`/rest/v1/${STORAGE_TABLE}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
+      body: JSON.stringify(payload)
+    });
+    if (result && result[0]) { cloudRowId = result[0].id; return true; }
+    return false;
+  }
+}
 
 // ---------- 主題 ----------
 function applyTheme(theme) {
@@ -106,72 +112,9 @@ function initAuth() {
   enterApp();
 }
 
-async function doLogin() {
-  const email = $('auth-email').value.trim();
-  const pw = $('auth-password').value.trim();
-  if (!email || pw.length < 6) { toast('請輸入 Email 與至少 6 碼密碼'); return; }
-
-  if (supa) {
-    const { data, error } = await supa.auth.signInWithPassword({ email, password: pw });
-    if (error) { toast('登入失敗：' + error.message); return; }
-    // onAuthStateChange 會自動 enterApp
-    return;
-  }
-
-  // 本機模式
-  const accts = JSON.parse(localStorage.getItem(LS_ACCT) || '{}');
-  if (Object.keys(accts).length === 0) {
-    accts[email] = pw;
-    localStorage.setItem(LS_ACCT, JSON.stringify(accts));
-  } else if (accts[email] !== pw) {
-    toast('帳號或密碼錯誤'); return;
-  }
-  currentUser = { email };
-  localStorage.setItem(LS_USER, email);
-  enterApp();
-}
-
-async function doSignup() {
-  const email = $('auth-email').value.trim();
-  const pw = $('auth-password').value.trim();
-  if (!email || pw.length < 6) { toast('請輸入 Email 與至少 6 碼密碼'); return; }
-
-  if (supa) {
-    const { data, error } = await supa.auth.signUp({ email, password: pw });
-    if (error) { toast('註冊失敗：' + error.message); return; }
-    if (data?.user && !data.session) {
-      toast('註冊成功，請至信箱確認後登入');
-    }
-    return;
-  }
-
-  const accts = JSON.parse(localStorage.getItem(LS_ACCT) || '{}');
-  if (accts[email]) { toast('此 Email 已註冊，請直接登入'); return; }
-  accts[email] = pw;
-  localStorage.setItem(LS_ACCT, JSON.stringify(accts));
-  currentUser = { email };
-  localStorage.setItem(LS_USER, email);
-  toast('註冊成功，已自動登入');
-  enterApp();
-}
-
 function enterApp() {
-  const authScreen = $('auth-screen');
-  if (authScreen) authScreen.classList.add('hidden');
   $('app-screen').classList.remove('hidden');
   initApp();
-}
-
-async function doLogout() {
-  if (realtimeChannel) { try { supa.removeChannel(realtimeChannel); } catch {} realtimeChannel = null; }
-  if (supa) { await supa.auth.signOut(); }
-  localStorage.removeItem(LS_USER);
-  currentUser = null;
-  $('app-screen').classList.add('hidden');
-  const authScreen = $('auth-screen');
-  if (authScreen) authScreen.classList.remove('hidden');
-  const authForm = $('auth-form');
-  if (authForm) authForm.reset();
 }
 
 // ---------- 主應用 ----------
@@ -180,7 +123,7 @@ const state = { category: 'personal', query: '', editingId: null, notes: [] };
 function initApp() {
   bindAppEvents();
   renderCategories();
-  loadNotes(); // 雲端或本機載入
+  loadNotes();
   updateFab();
 }
 
@@ -248,50 +191,21 @@ function renderCategories() {
   });
 }
 
-// ---------- 資料載入（雲端 / 本機） ----------
+// ---------- 資料載入（雲端 + 本機備份） ----------
 async function loadNotes() {
-  if (supa && currentUser?.id) {
-    try {
-      const { data, error } = await supa
-        .from('notes')
-        .select('*')
-        .eq('user_id', currentUser.id)
-        .order('updated_at', { ascending: false });
-      if (error) throw error;
-      state.notes = (data || []).map(mapFromRow);
-      // 雲端備份到本機（離線/防遺失）
-      writeNotes(state.notes);
-      renderNotes();
-      renderCategories();
-      subscribeRealtime();
-    } catch (e) {
-      console.warn('雲端載入失敗，改用本機備份：', e.message);
-      toast('雲端載入失敗，已切換本機資料');
-      state.notes = readNotes();
-      renderNotes();
-      renderCategories();
-    }
-  } else {
-    state.notes = readNotes();
+  // 先從雲端載入
+  const cloud = await loadFromCloud();
+  if (cloud) {
+    state.notes = cloud;
+    writeNotes(state.notes); // 備份到本機
     renderNotes();
     renderCategories();
+    return;
   }
-}
-
-// 即時同步：A 手機變更，B 手機秒級更新
-function subscribeRealtime() {
-  if (!supa || !currentUser?.id || realtimeChannel) return;
-  try {
-    realtimeChannel = supa
-      .channel('notes-realtime')
-      .on('postgres_changes',
-        { event: '*', schema: 'public', table: 'notes', filter: `user_id=eq.${currentUser.id}` },
-        () => { loadNotes(); } // 任一變更即重新載入（含對方手機的修改）
-      )
-      .subscribe();
-  } catch (e) {
-    console.warn('即時同步訂閱失敗：', e.message);
-  }
+  // 雲端失敗或未設定，改用本機
+  state.notes = readNotes();
+  renderNotes();
+  renderCategories();
 }
 
 // ---------- Modal / 新增編輯 ----------
@@ -365,43 +279,10 @@ async function saveNote() {
   const now = Date.now();
   const editing = !!state.editingId;
 
-  if (supa && currentUser?.id) {
-    // 雲端儲存
-    try {
-      if (editing) {
-        const row = {
-          title, category, content,
-          image: image ?? undefined,
-          pdf: pdf ?? undefined,
-          updated_at: new Date(now).toISOString()
-        };
-        const { error } = await supa.from('notes').update(row).eq('id', state.editingId).eq('user_id', currentUser.id);
-        if (error) throw error;
-      } else {
-        const id = uid();
-        const row = {
-          id, user_id: currentUser.id, title, category, content,
-          image: image || null, pdf: pdf || null,
-          created_at: new Date(now).toISOString(), updated_at: new Date(now).toISOString()
-        };
-        const { error } = await supa.from('notes').insert(row);
-        if (error) throw error;
-      }
-      closeModal();
-      toast(editing ? '已更新（已同步）' : '已新增（已同步）');
-      // realtime 會自動 reload；保險起見也手動 reload
-      await loadNotes();
-      updateFab();
-    } catch (e) {
-      console.warn('雲端儲存失敗，改存本機：', e.message);
-      toast('雲端儲存失敗，已存本機（待連線自動同步）');
-      saveLocal(title, category, content, image, pdf, now, editing);
-    }
-  } else {
-    saveLocal(title, category, content, image, pdf, now, editing);
-    closeModal();
-    toast(editing ? '已更新' : '已新增');
-  }
+  saveLocal(title, category, content, image, pdf, now, editing);
+  await cloudSync();
+  closeModal();
+  toast(editing ? '已更新' : '已新增');
 }
 
 // 本機儲存（離線 / fallback）
@@ -424,27 +305,31 @@ function saveLocal(title, category, content, image, pdf, now, editing) {
 
 async function deleteNote(id) {
   if (!confirm('確定刪除此筆記？')) return;
+  let notes = readNotes().filter(n => n.id !== id);
+  writeNotes(notes);
+  state.notes = notes;
+  renderNotes();
+  renderCategories();
+  updateFab();
+  await cloudSync();
+  toast('已刪除');
+}
 
-  if (supa && currentUser?.id) {
-    try {
-      const { error } = await supa.from('notes').delete().eq('id', id).eq('user_id', currentUser.id);
-      if (error) throw error;
-      toast('已刪除（已同步）');
-      await loadNotes();
-      updateFab();
-    } catch (e) {
-      console.warn('雲端刪除失敗：', e.message);
-      toast('雲端刪除失敗');
-    }
-  } else {
-    let notes = readNotes().filter(n => n.id !== id);
-    writeNotes(notes);
-    state.notes = notes;
-    renderNotes();
-    renderCategories();
-    updateFab();
-    toast('已刪除');
-  }
+// 雲端同步：將本機筆記上傳到雲端
+async function cloudSync() {
+  const notes = readNotes();
+  const ok = await saveToCloud(notes);
+  if (ok) console.log('雲端同步成功');
+}
+
+// 雲端載入：從雲端下載並合併到本機
+async function cloudLoad() {
+  const remote = await loadFromCloud();
+  if (!remote) return;
+  state.notes = remote;
+  writeNotes(remote);
+  renderNotes();
+  renderCategories();
 }
 
 // ---------- 渲染列表 ----------
