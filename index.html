@@ -9,36 +9,16 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <meta name="apple-mobile-web-app-title" content="筆記本" />
   <title>多功能筆記本</title>
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
   <div id="toast" class="toast"></div>
 
-  <!-- 登入 / 註冊 -->
-  <section id="auth-screen" class="auth-screen">
-    <div class="auth-card">
-      <h1>📝 多功能筆記本</h1>
-      <p>請登入以同步 A / B 手機資料</p>
-      <form id="auth-form">
-        <input type="email" id="auth-email" placeholder="Email" required />
-        <input type="password" id="auth-password" placeholder="密碼（至少 6 碼）" required minlength="6" />
-        <div class="auth-actions">
-          <button type="submit" id="btn-login">登入</button>
-          <button type="button" id="btn-signup">註冊</button>
-        </div>
-      </form>
-      <p class="hint">若 Supabase 未設定，將使用本機儲存測試。</p>
-    </div>
-  </section>
-
-  <!-- 主應用 -->
-  <section id="app-screen" class="app-screen hidden">
+  <section id="app-screen" class="app-screen">
     <header class="app-header">
       <h1>📝 多功能筆記本</h1>
       <div class="header-actions">
         <button id="theme-toggle" title="切換日/夜">🌙</button>
-        <button id="btn-logout" title="登出">登出</button>
       </div>
     </header>
 

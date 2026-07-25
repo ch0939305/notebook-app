@@ -100,37 +100,10 @@ function applyTheme(theme) {
 
 // ---------- 登入 / 註冊 ----------
 function initAuth() {
-  // 雲端模式：監聽 auth 狀態，已登入直接進應用
-  if (supa) {
-    supa.auth.onAuthStateChange((_event, session) => {
-      if (session?.user) {
-        currentUser = { id: session.user.id, email: session.user.email };
-        localStorage.setItem(LS_USER, session.user.email);
-        enterApp();
-      } else {
-        currentUser = null;
-        localStorage.removeItem(LS_USER);
-        $('app-screen')?.classList.add('hidden');
-        $('auth-screen')?.classList.remove('hidden');
-      }
-    });
-    // 嘗試還原 session
-    supa.auth.getSession().then(({ data }) => {
-      if (data.session?.user) {
-        currentUser = { id: data.session.user.id, email: data.session.user.email };
-        localStorage.setItem(LS_USER, data.session.user.email);
-        enterApp();
-      }
-    });
-  } else {
-    // 本機模式：已登入則直接進
-    const u = localStorage.getItem(LS_USER);
-    if (u) { currentUser = { email: u }; enterApp(); }
-  }
-
-  const form = $('auth-form');
-  form.addEventListener('submit', (e) => { e.preventDefault(); doLogin(); });
-  $('btn-signup').addEventListener('click', doSignup);
+  // 本機模式 - 直接進入 APP，不需登入
+  currentUser = { email: 'local' };
+  localStorage.setItem(LS_USER, 'local');
+  enterApp();
 }
 
 async function doLogin() {
@@ -214,8 +187,6 @@ function bindAppEvents() {
     const cur = document.documentElement.getAttribute('data-theme') || 'light';
     applyTheme(cur === 'dark' ? 'light' : 'dark');
   };
-  $('btn-logout').onclick = doLogout;
-
   document.querySelectorAll('.category-btn').forEach(btn => {
     btn.onclick = () => {
       state.category = btn.dataset.category;
