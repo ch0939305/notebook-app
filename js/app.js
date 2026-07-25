@@ -188,19 +188,24 @@ function renderCategories() {
   });
 }
 
-// ---------- 資料載入（雲端 + 本機備份） ----------
+// ---------- 資料載入（雲端 + 本機合併） ----------
 async function loadNotes() {
-  // 先從雲端載入
+  const local = readNotes();
   const cloud = await loadFromCloud();
   if (cloud) {
-    state.notes = cloud;
-    writeNotes(state.notes); // 備份到本機
-    renderNotes();
-    renderCategories();
-    return;
+    // 合併雲端和本機（以 id 為準，不重複）
+    const merged = cloud.slice();
+    const cloudIds = new Set(cloud.map(n => n.id));
+    for (const n of local) {
+      if (!cloudIds.has(n.id)) {
+        merged.push(n);
+      }
+    }
+    state.notes = merged;
+    writeNotes(state.notes);
+  } else {
+    state.notes = local;
   }
-  // 雲端失敗或未設定，改用本機
-  state.notes = readNotes();
   renderNotes();
   renderCategories();
 }
@@ -346,7 +351,23 @@ async function deleteNote(id) {
 
 // 雲端同步：將本機筆記上傳到雲端
 async function cloudSync() {
-  const notes = readNotes();
+  // 先抓雲端最新資料
+  const cloud = await loadFromCloud();
+  let notes = readNotes();
+  if (cloud) {
+    // 合併：雲端有的但本機沒有 = 另一支手機寫的
+    const localIds = new Set(notes.map(n => n.id));
+    for (const n of cloud) {
+      if (!localIds.has(n.id)) {
+        notes.push(n);
+      }
+    }
+    // 更新本機
+    writeNotes(notes);
+    state.notes = notes;
+    renderNotes();
+    renderCategories();
+  }
   const ok = await saveToCloud(notes);
   if (ok) { console.log('雲端同步成功'); }
   else { console.warn('雲端同步失敗，資料僅存於本機'); }
