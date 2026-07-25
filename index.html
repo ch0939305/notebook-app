@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#6366f1" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#0f172a" media="(prefers-color-scheme: dark)" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="筆記本" />
+  <title>多功能筆記本</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div id="toast" class="toast"></div>
+
+  <!-- 登入 / 註冊 -->
+  <section id="auth-screen" class="auth-screen">
+    <div class="auth-card">
+      <h1>📝 多功能筆記本</h1>
+      <p>請登入以同步 A / B 手機資料</p>
+      <form id="auth-form">
+        <input type="email" id="auth-email" placeholder="Email" required />
+        <input type="password" id="auth-password" placeholder="密碼（至少 6 碼）" required minlength="6" />
+        <div class="auth-actions">
+          <button type="submit" id="btn-login">登入</button>
+          <button type="button" id="btn-signup">註冊</button>
+        </div>
+      </form>
+      <p class="hint">若 Supabase 未設定，將使用本機儲存測試。</p>
+    </div>
+  </section>
+
+  <!-- 主應用 -->
+  <section id="app-screen" class="app-screen hidden">
+    <header class="app-header">
+      <h1>📝 多功能筆記本</h1>
+      <div class="header-actions">
+        <button id="theme-toggle" title="切換日/夜">🌙</button>
+        <button id="btn-logout" title="登出">登出</button>
+      </div>
+    </header>
+
+    <nav class="category-bar">
+      <button class="category-btn active" data-category="personal">個人</button>
+      <button class="category-btn" data-category="company">公司</button>
+      <button class="category-btn" data-category="computer">電腦</button>
+      <button class="category-btn" data-category="stocks">股票</button>
+    </nav>
+
+    <div class="toolbar">
+      <input type="search" id="search-input" placeholder="搜尋筆記標題或內容..." />
+      <button id="btn-add" class="btn-primary">+ 新增筆記</button>
+    </div>
+
+    <main id="notes-list" class="notes-list">
+      <!-- 筆記卡片由 JS 渲染 -->
+    </main>
+
+    <!-- 手機端固定新增鈕 -->
+    <button id="fab-add" class="fab" aria-label="新增筆記">+</button>
+  </section>
+
+  <!-- 新增 / 編輯 Modal -->
+  <div id="note-modal" class="modal hidden">
+    <div class="modal-content">
+      <h2 id="modal-title">新增筆記</h2>
+      <form id="note-form">
+        <input type="text" id="note-title" placeholder="標題" required />
+
+        <select id="note-category">
+          <option value="personal">個人</option>
+          <option value="company">公司</option>
+          <option value="computer">電腦</option>
+          <option value="stocks">股票</option>
+        </select>
+
+        <textarea id="note-content" rows="5" placeholder="內容..."></textarea>
+
+        <div class="file-row">
+          <label>
+            圖片
+            <input type="file" id="note-image" accept="image/*" />
+          </label>
+          <input type="text" id="image-name" placeholder="圖片自訂檔名（預設 .jpg）" />
+        </div>
+        <div id="image-preview-wrap" class="preview-wrap hidden">
+          <img id="image-preview" alt="預覽" />
+        </div>
+
+        <div class="file-row">
+          <label>
+            PDF
+            <input type="file" id="note-pdf" accept="application/pdf" />
+          </label>
+          <input type="text" id="pdf-name" placeholder="PDF 自訂檔名（預設 .pdf）" />
+        </div>
+        <div id="pdf-preview-wrap" class="preview-wrap hidden">
+          <a id="pdf-link" target="_blank" rel="noopener">📄 開啟 PDF</a>
+        </div>
+
+        <div class="modal-actions">
+          <button type="button" id="btn-cancel" class="btn-secondary">取消</button>
+          <button type="submit" id="btn-save" class="btn-primary">儲存</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="js/config.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
