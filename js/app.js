@@ -69,7 +69,7 @@ async function cloudFetch(path, opts = {}) {
 
 async function loadFromCloud() {
   if (!hasCloudDB) return null;
-  const data = await cloudFetch(`/rest/v1/${STORAGE_TABLE}?select=id,data&data->key=eq.${STORAGE_KEY}`);
+  const data = await cloudFetch(`/rest/v1/${STORAGE_TABLE}?select=id,data&data->>key=eq.${STORAGE_KEY}`);
   if (!data || data.length === 0) return null;
   cloudRowId = data[0].id;
   return data[0].data?.notes || null;
@@ -348,7 +348,8 @@ async function deleteNote(id) {
 async function cloudSync() {
   const notes = readNotes();
   const ok = await saveToCloud(notes);
-  if (ok) console.log('雲端同步成功');
+  if (ok) { console.log('雲端同步成功'); }
+  else { console.warn('雲端同步失敗，資料僅存於本機'); }
 }
 
 // 雲端載入：從雲端下載並合併到本機
