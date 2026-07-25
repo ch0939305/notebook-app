@@ -156,7 +156,8 @@ async function doSignup() {
 }
 
 function enterApp() {
-  $('auth-screen').classList.add('hidden');
+  const authScreen = $('auth-screen');
+  if (authScreen) authScreen.classList.add('hidden');
   $('app-screen').classList.remove('hidden');
   initApp();
 }
@@ -167,8 +168,10 @@ async function doLogout() {
   localStorage.removeItem(LS_USER);
   currentUser = null;
   $('app-screen').classList.add('hidden');
-  $('auth-screen').classList.remove('hidden');
-  $('auth-form').reset();
+  const authScreen = $('auth-screen');
+  if (authScreen) authScreen.classList.remove('hidden');
+  const authForm = $('auth-form');
+  if (authForm) authForm.reset();
 }
 
 // ---------- 主應用 ----------
