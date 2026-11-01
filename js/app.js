@@ -7,9 +7,20 @@
 
 // ---------- 設定 / 初始化 ----------
 const LS_NOTES = 'notebook:notes';
+const LS_CATS = 'notebook:categories';
 const LS_THEME = 'notebook:theme';
 const LS_USER = 'notebook:user';
 const LS_ACCT = 'notebook:accounts'; // 本機帳號（測試用）
+
+// 預設分類（可自行新增 / 改名 / 刪除 / 排序）
+const DEFAULT_CATS = [
+  { id: 'personal', name: '個人' },
+  { id: 'company', name: '公司' },
+  { id: 'computer', name: '電腦' },
+  { id: 'stocks', name: '股票' }
+];
+const UNCAT_ID = 'uncategorized';
+const UNCAT_NAME = '未分類';
 
 // 偵測是否已設定 Supabase
 const hasCloudDB = (typeof SUPABASE_URL !== 'undefined')
@@ -20,9 +31,6 @@ const hasCloudDB = (typeof SUPABASE_URL !== 'undefined')
   && !SUPABASE_ANON_KEY.includes('your-anon-key');
 
 let cloudRowId = null;
-
-// 分類對照
-const CAT_LABELS = { personal: '個人', company: '公司', computer: '電腦', stocks: '股票' };
 
 // 目前使用者
 let currentUser = null;
@@ -55,6 +63,52 @@ function writeNotes(arr) {
   }
 }
 
+/* ---------- 分類存取 ---------- */
+function readCats() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(LS_CATS));
+    if (Array.isArray(raw) && raw.length) return normalizeCats(raw);
+  } catch (e) { /* 讀取失敗就用預設值 */ }
+  return DEFAULT_CATS.map(c => ({ ...c, updatedAt: 0 }));
+}
+function normalizeCats(arr) {
+  return arr
+    .filter(c => c && (c.id || c.name))
+    .map(c => ({
+      id: String(c.id || ('c_' + uid())),
+      name: String(c.name || '未命名'),
+      updatedAt: Number(c.updatedAt) || 0
+    }));
+}
+function writeCats(arr) {
+  try { localStorage.setItem(LS_CATS, JSON.stringify(arr)); } catch (e) { /* 忽略 */ }
+}
+// 合併本機與雲端分類：id 相同取 updatedAt 較新者，其餘聯集
+function mergeCats(localCats, cloudCats) {
+  if (!Array.isArray(cloudCats) || !cloudCats.length) return localCats;
+  const map = new Map();
+  for (const c of normalizeCats(localCats)) map.set(c.id, c);
+  for (const c of normalizeCats(cloudCats)) {
+    const cur = map.get(c.id);
+    if (!cur || (c.updatedAt || 0) >= (cur.updatedAt || 0)) map.set(c.id, c);
+  }
+  return Array.from(map.values());
+}
+// 檢查下拉選單是否含有某個值
+function hasOption(sel, val) {
+  if (!sel) return false;
+  for (let i = 0; i < sel.options.length; i++) {
+    if (sel.options[i].value === val) return true;
+  }
+  return false;
+}
+// 由 id 取顯示名稱
+function catName(id) {
+  if (!id || id === UNCAT_ID) return UNCAT_NAME;
+  const c = state.categories.find(x => x.id === id);
+  return c ? c.name : UNCAT_NAME;
+}
+
 // 雲端工具函式
 async function cloudFetch(path, opts = {}) {
   if (!hasCloudDB) return null;
@@ -72,12 +126,13 @@ async function loadFromCloud() {
   const data = await cloudFetch(`/rest/v1/${STORAGE_TABLE}?select=id,data&data->>key=eq.${STORAGE_KEY}`);
   if (!data || data.length === 0) return null;
   cloudRowId = data[0].id;
-  return data[0].data?.notes || null;
+  const d = data[0].data || {};
+  return { notes: d.notes || null, categories: d.categories || null };
 }
 
-async function saveToCloud(notes) {
+async function saveToCloud(notes, categories) {
   if (!hasCloudDB) return false;
-  const payload = { data: { key: STORAGE_KEY, notes } };
+  const payload = { data: { key: STORAGE_KEY, notes, categories: categories || [] } };
   if (cloudRowId) {
     const ok = await cloudFetch(`/rest/v1/${STORAGE_TABLE}?id=eq.${cloudRowId}`, {
       method: 'PATCH',
@@ -118,13 +173,24 @@ function enterApp() {
 }
 
 // ---------- 主應用 ----------
-const state = { category: 'personal', query: '', editingId: null, notes: [] };
+const state = { category: 'all', query: '', editingId: null, notes: [], categories: [] };
+
+/* 統一刷新入口：所有資料變動後只呼叫這裡，渲染函式之間不互相呼叫 */
+function refreshAll() {
+  renderCategories();
+  renderCategorySelect();
+  renderNotes();
+  updateFab();
+}
+
+let appInitialized = false;
 
 function initApp() {
+  if (appInitialized) return; // 防止重複綁定事件
+  appInitialized = true;
+  state.categories = readCats();
   bindAppEvents();
-  renderCategories();
   loadNotes();
-  updateFab();
 }
 
 function bindAppEvents() {
@@ -133,14 +199,6 @@ function bindAppEvents() {
     const cur = document.documentElement.getAttribute('data-theme') || 'light';
     applyTheme(cur === 'dark' ? 'light' : 'dark');
   };
-  document.querySelectorAll('.category-btn').forEach(btn => {
-    btn.onclick = () => {
-      state.category = btn.dataset.category;
-      document.querySelectorAll('.category-btn').forEach(b => b.classList.toggle('active', b === btn));
-      renderNotes();
-    };
-  });
-
   $('search-input').addEventListener('input', (e) => {
     state.query = e.target.value.trim().toLowerCase();
     renderNotes();
@@ -148,6 +206,17 @@ function bindAppEvents() {
 
   $('btn-add').onclick = () => openModal(null);
   if ($('fab-add')) $('fab-add').onclick = () => openModal(null);
+
+  // 分類管理
+  $('btn-cat-manage').onclick = openCatManager;
+  $('btn-cat-close').onclick = closeCatManager;
+  $('cat-modal').addEventListener('click', (e) => {
+    if (e.target === $('cat-modal')) closeCatManager();
+  });
+  $('btn-cat-add').onclick = addCategory;
+  $('new-cat-name').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); addCategory(); }
+  });
 
   $('btn-cancel').onclick = closeModal;
   $('note-modal').addEventListener('click', (e) => {
@@ -176,16 +245,168 @@ function bindAppEvents() {
   });
 }
 
+/* ---------- 分類列渲染（含「全部」） ---------- */
 function renderCategories() {
-  document.querySelectorAll('.category-btn').forEach(b => {
-    const c = b.dataset.category;
-    const n = state.notes.filter(x => x.category === c).length;
-    b.querySelector('.count')?.remove();
-    const span = document.createElement('span');
-    span.className = 'count';
-    span.textContent = n;
-    b.appendChild(span);
+  const bar = $('category-bar');
+  if (!bar) return;
+
+  const total = state.notes.length;
+  const uncatCount = state.notes.filter(n => !n.category || !state.categories.some(c => c.id === n.category)).length;
+
+  const items = [{ id: 'all', name: '全部', count: total }];
+  state.categories.forEach(c => {
+    items.push({ id: c.id, name: c.name, count: state.notes.filter(n => n.category === c.id).length });
   });
+  if (uncatCount > 0) items.push({ id: UNCAT_ID, name: UNCAT_NAME, count: uncatCount });
+
+  // 目前選取的分類若已不存在（被刪除），自動回到「全部」
+  if (state.category !== 'all' && !items.some(i => i.id === state.category)) {
+    state.category = 'all';
+  }
+
+  bar.innerHTML = items.map(i => `
+    <button type="button" class="category-btn${i.id === state.category ? ' active' : ''}" data-category="${esc(i.id)}">
+      ${esc(i.name)}<span class="count">${i.count}</span>
+    </button>`).join('');
+
+  bar.querySelectorAll('.category-btn').forEach(btn => {
+    btn.onclick = () => {
+      state.category = btn.dataset.category;
+      renderCategories();
+      renderNotes();
+    };
+  });
+}
+
+/* ---------- 筆記表單的分類下拉選單 ---------- */
+function renderCategorySelect() {
+  const sel = $('note-category');
+  if (!sel) return;
+  const keep = sel.value;
+  sel.innerHTML = state.categories.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('')
+    + `<option value="${UNCAT_ID}">${UNCAT_NAME}</option>`;
+  if (keep && hasOption(sel, keep)) sel.value = keep;
+  else if (state.category !== 'all' && hasOption(sel, state.category)) sel.value = state.category;
+}
+
+/* ---------- 分類管理 Modal ---------- */
+function openCatManager() {
+  renderCatManager();
+  $('cat-modal').classList.remove('hidden');
+}
+
+function closeCatManager() {
+  $('cat-modal').classList.add('hidden');
+  $('new-cat-name').value = '';
+}
+
+function renderCatManager() {
+  const box = $('cat-manage-list');
+  if (!box) return;
+  if (state.categories.length === 0) {
+    box.innerHTML = '<div class="cat-empty">尚無分類，請在上方輸入名稱新增</div>';
+    return;
+  }
+  box.innerHTML = state.categories.map((c, idx) => {
+    const n = state.notes.filter(x => x.category === c.id).length;
+    return `
+    <div class="cat-row" data-id="${esc(c.id)}">
+      <input type="text" class="cat-name-input" value="${esc(c.name)}" maxlength="20" aria-label="分類名稱" />
+      <span class="cat-count">${n} 則</span>
+      <button type="button" class="cat-btn" data-act="up" ${idx === 0 ? 'disabled' : ''} title="上移">↑</button>
+      <button type="button" class="cat-btn" data-act="down" ${idx === state.categories.length - 1 ? 'disabled' : ''} title="下移">↓</button>
+      <button type="button" class="cat-btn danger" data-act="del" title="刪除">✕</button>
+    </div>`;
+  }).join('');
+
+  box.querySelectorAll('.cat-row').forEach(row => {
+    const id = row.dataset.id;
+    row.querySelector('.cat-name-input').addEventListener('change', (e) => {
+      renameCategory(id, e.target.value);
+    });
+    row.querySelectorAll('.cat-btn').forEach(b => {
+      b.onclick = () => {
+        const act = b.dataset.act;
+        if (act === 'up') moveCategory(id, -1);
+        else if (act === 'down') moveCategory(id, 1);
+        else if (act === 'del') deleteCategory(id);
+      };
+    });
+  });
+}
+
+function saveCatsToStorage() {
+  writeCats(state.categories);
+  renderCategories();
+  renderCategorySelect();
+  renderNotes();
+  cloudSync();
+}
+
+function addCategory() {
+  const input = $('new-cat-name');
+  const name = input.value.trim();
+  if (!name) { toast('請輸入分類名稱'); return; }
+  if (state.categories.some(c => c.name === name)) { toast('已有同名分類'); return; }
+  state.categories.push({ id: 'c_' + uid(), name: name, updatedAt: Date.now() });
+  input.value = '';
+  renderCatManager();
+  saveCatsToStorage();
+  toast('已新增分類「' + name + '」');
+}
+
+function renameCategory(id, name) {
+  const clean = String(name || '').trim();
+  const c = state.categories.find(x => x.id === id);
+  if (!c) return;
+  if (!clean) { toast('名稱不可空白，已還原'); renderCatManager(); return; }
+  if (state.categories.some(x => x.id !== id && x.name === clean)) {
+    toast('已有同名分類'); renderCatManager(); return;
+  }
+  c.name = clean;
+  c.updatedAt = Date.now();
+  saveCatsToStorage();
+  toast('已改名為「' + clean + '」');
+}
+
+function moveCategory(id, dir) {
+  const idx = state.categories.findIndex(x => x.id === id);
+  const next = idx + dir;
+  if (idx < 0 || next < 0 || next >= state.categories.length) return;
+  const tmp = state.categories[idx];
+  state.categories[idx] = state.categories[next];
+  state.categories[next] = tmp;
+  state.categories.forEach(c => { c.updatedAt = Date.now(); });
+  renderCatManager();
+  saveCatsToStorage();
+}
+
+function deleteCategory(id) {
+  const c = state.categories.find(x => x.id === id);
+  if (!c) return;
+  const owned = state.notes.filter(n => n.category === id);
+  let dropNotes = false;
+
+  if (owned.length > 0) {
+    dropNotes = confirm('分類「' + c.name + '」下有 ' + owned.length + ' 則筆記。\n\n按「確定」＝連筆記一起刪除\n按「取消」＝筆記保留並移到「未分類」');
+  } else if (!confirm('確定刪除分類「' + c.name + '」？')) {
+    return;
+  }
+
+  state.categories = state.categories.filter(x => x.id !== id);
+  let notes = readNotes();
+  if (dropNotes) {
+    notes = notes.filter(n => n.category !== id);
+  } else {
+    notes = notes.map(n => (n.category === id ? { ...n, category: UNCAT_ID, updatedAt: Date.now() } : n));
+  }
+  writeNotes(notes);
+  state.notes = notes;
+  if (state.category === id) state.category = 'all';
+
+  renderCatManager();
+  saveCatsToStorage();
+  toast('已刪除分類「' + c.name + '」');
 }
 
 // ---------- 資料載入（雲端 + 本機合併） ----------
@@ -194,8 +415,8 @@ async function loadNotes() {
   const cloud = await loadFromCloud();
   if (cloud) {
     // 合併雲端和本機（以 id 為準，不重複）
-    const merged = cloud.slice();
-    const cloudIds = new Set(cloud.map(n => n.id));
+    const merged = (cloud.notes || []).slice();
+    const cloudIds = new Set(merged.map(n => n.id));
     for (const n of local) {
       if (!cloudIds.has(n.id)) {
         merged.push(n);
@@ -203,11 +424,14 @@ async function loadNotes() {
     }
     state.notes = merged;
     writeNotes(state.notes);
+
+    // 合併分類：本機與雲端聯集，同名 id 取較新者
+    state.categories = mergeCats(state.categories, cloud.categories);
+    writeCats(state.categories);
   } else {
     state.notes = local;
   }
-  renderNotes();
-  renderCategories();
+  refreshAll();
 }
 
 // ---------- Modal / 新增編輯 ----------
@@ -218,7 +442,19 @@ function openModal(note) {
   state.editingId = note ? note.id : null;
   $('modal-title').textContent = note ? '編輯筆記' : '新增筆記';
   $('note-title').value = note ? note.title : '';
-  $('note-category').value = note ? note.category : state.category;
+  renderCategorySelect();
+  if (note) {
+    if (hasOption($('note-category'), note.category)) {
+      $('note-category').value = note.category;
+    } else {
+      $('note-category').value = UNCAT_ID;
+    }
+  } else {
+    const preset = (state.category !== 'all' && hasOption($('note-category'), state.category))
+      ? state.category
+      : (state.categories[0] ? state.categories[0].id : UNCAT_ID);
+    $('note-category').value = preset;
+  }
   $('note-content').value = note ? note.content : '';
 
   pendingImage = note?.image || null;
@@ -332,9 +568,7 @@ function saveLocal(title, category, content, image, pdf, now, editing) {
   }
   writeNotes(notes);
   state.notes = notes;
-  renderNotes();
-  renderCategories();
-  updateFab();
+  refreshAll();
 }
 
 async function deleteNote(id) {
@@ -342,9 +576,7 @@ async function deleteNote(id) {
   let notes = readNotes().filter(n => n.id !== id);
   writeNotes(notes);
   state.notes = notes;
-  renderNotes();
-  renderCategories();
-  updateFab();
+  refreshAll();
   await cloudSync();
   toast('已刪除');
 }
@@ -357,18 +589,22 @@ async function cloudSync() {
   if (cloud) {
     // 合併：雲端有的但本機沒有 = 另一支手機寫的
     const localIds = new Set(notes.map(n => n.id));
-    for (const n of cloud) {
+    for (const n of (cloud.notes || [])) {
       if (!localIds.has(n.id)) {
         notes.push(n);
       }
     }
+    // 分類同步：另一支手機新增/改名的分類
+    if (Array.isArray(cloud.categories) && cloud.categories.length) {
+      state.categories = mergeCats(state.categories, cloud.categories);
+      writeCats(state.categories);
+    }
     // 更新本機
     writeNotes(notes);
     state.notes = notes;
-    renderNotes();
-    renderCategories();
+    refreshAll();
   }
-  const ok = await saveToCloud(notes);
+  const ok = await saveToCloud(notes, state.categories);
   if (ok) { console.log('雲端同步成功'); }
   else { console.warn('雲端同步失敗，資料僅存於本機'); }
 }
@@ -377,10 +613,14 @@ async function cloudSync() {
 async function cloudLoad() {
   const remote = await loadFromCloud();
   if (!remote) return;
-  state.notes = remote;
-  writeNotes(remote);
-  renderNotes();
-  renderCategories();
+  const notes = remote.notes || [];
+  state.notes = notes;
+  writeNotes(notes);
+  if (Array.isArray(remote.categories) && remote.categories.length) {
+    state.categories = mergeCats(state.categories, remote.categories);
+    writeCats(state.categories);
+  }
+  refreshAll();
 }
 
 // ---------- 渲染列表 ----------
@@ -388,7 +628,11 @@ function renderNotes() {
   const grid = $('notes-list');
   let list = state.notes.slice();
 
-  if (state.category !== 'all') list = list.filter(n => n.category === state.category);
+  if (state.category === UNCAT_ID) {
+    list = list.filter(n => !n.category || !state.categories.some(c => c.id === n.category));
+  } else if (state.category !== 'all') {
+    list = list.filter(n => n.category === state.category);
+  }
   if (state.query) {
     list = list.filter(n =>
       (n.title || '').toLowerCase().includes(state.query) ||
@@ -409,7 +653,7 @@ function renderNotes() {
     return `
     <article class="note-card" data-id="${esc(n.id)}">
       <div class="note-meta">
-        <span class="note-cat">${esc(CAT_LABELS[n.category] || n.category)}</span>
+        <span class="note-cat">${esc(catName(n.category))}</span>
         <span>${esc(fmtDate(n.updatedAt || n.createdAt))}</span>
       </div>
       <h3>${esc(n.title)}</h3>

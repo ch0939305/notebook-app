@@ -7,8 +7,8 @@
   <meta name="theme-color" content="#0f172a" media="(prefers-color-scheme: dark)" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-  <meta name="apple-mobile-web-app-title" content="筆記本" />
-  <title>多功能筆記本</title>
+  <meta name="apple-mobile-web-app-title" content="工作備忘錄" />
+  <title>工作備忘錄</title>
   <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
@@ -16,18 +16,15 @@
 
   <section id="app-screen" class="app-screen">
     <header class="app-header">
-      <h1>📝 多功能筆記本</h1>
+      <h1>📝 工作備忘錄</h1>
       <div class="header-actions">
+        <button id="btn-cat-manage" title="分類管理">🏷️</button>
         <button id="theme-toggle" title="切換日/夜">🌙</button>
       </div>
     </header>
 
-    <nav class="category-bar">
-      <button class="category-btn active" data-category="personal">個人</button>
-      <button class="category-btn" data-category="company">公司</button>
-      <button class="category-btn" data-category="computer">電腦</button>
-      <button class="category-btn" data-category="stocks">股票</button>
-    </nav>
+    <!-- 分類列由 JS 動態渲染（可新增 / 刪除 / 改名） -->
+    <nav id="category-bar" class="category-bar"></nav>
 
     <div class="toolbar">
       <input type="search" id="search-input" placeholder="搜尋筆記標題或內容..." />
@@ -50,10 +47,7 @@
         <input type="text" id="note-title" placeholder="標題" required />
 
         <select id="note-category">
-          <option value="personal">個人</option>
-          <option value="company">公司</option>
-          <option value="computer">電腦</option>
-          <option value="stocks">股票</option>
+          <!-- 選項由 JS 依自訂分類動態產生 -->
         </select>
 
         <textarea id="note-content" rows="5" placeholder="內容..."></textarea>
@@ -85,6 +79,21 @@
           <button type="submit" id="btn-save" class="btn-primary">儲存</button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <!-- 分類管理 Modal：新增 / 改名 / 排序 / 刪除 -->
+  <div id="cat-modal" class="modal hidden">
+    <div class="modal-content">
+      <h2>分類管理</h2>
+      <div class="cat-add-row">
+        <input type="text" id="new-cat-name" placeholder="輸入新分類名稱，例：模具" maxlength="20" />
+        <button type="button" id="btn-cat-add" class="btn-primary">新增</button>
+      </div>
+      <div id="cat-manage-list" class="cat-manage-list"></div>
+      <div class="modal-actions">
+        <button type="button" id="btn-cat-close" class="btn-secondary">完成</button>
+      </div>
     </div>
   </div>
 
