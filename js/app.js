@@ -63,6 +63,15 @@ function writeNotes(arr) {
   }
 }
 
+// 已刪除筆記的 id 清單（tombstone）：避免雲端同步時把已刪除的筆記還原回來
+const LS_DEL = 'notebook:deleted';
+function readDeleted() {
+  try { return JSON.parse(localStorage.getItem(LS_DEL)) || []; } catch { return []; }
+}
+function writeDeleted(arr) {
+  try { localStorage.setItem(LS_DEL, JSON.stringify(arr)); } catch { /* 忽略 */ }
+}
+
 /* ---------- 分類存取 ---------- */
 function readCats() {
   try {
@@ -414,8 +423,9 @@ async function loadNotes() {
   const local = readNotes();
   const cloud = await loadFromCloud();
   if (cloud) {
-    // 合併雲端和本機（以 id 為準，不重複）
-    const merged = (cloud.notes || []).slice();
+    // 合併雲端和本機（以 id 為準，不重複）；本機已刪除的不再從雲端還原
+    const deleted = readDeleted();
+    const merged = (cloud.notes || []).filter(n => !deleted.includes(n.id)).slice();
     const cloudIds = new Set(merged.map(n => n.id));
     for (const n of local) {
       if (!cloudIds.has(n.id)) {
@@ -575,6 +585,8 @@ async function deleteNote(id) {
   if (!confirm('確定刪除此筆記？')) return;
   let notes = readNotes().filter(n => n.id !== id);
   writeNotes(notes);
+  const del = readDeleted();
+  if (!del.includes(id)) { del.push(id); writeDeleted(del); }
   state.notes = notes;
   refreshAll();
   await cloudSync();
@@ -585,12 +597,14 @@ async function deleteNote(id) {
 async function cloudSync() {
   // 先抓雲端最新資料
   const cloud = await loadFromCloud();
+  const deleted = readDeleted();
   let notes = readNotes();
   if (cloud) {
     // 合併：雲端有的但本機沒有 = 另一支手機寫的
+    // 但本機已刪除的（在 deleted 清單）不允許被雲端還原
     const localIds = new Set(notes.map(n => n.id));
     for (const n of (cloud.notes || [])) {
-      if (!localIds.has(n.id)) {
+      if (!localIds.has(n.id) && !deleted.includes(n.id)) {
         notes.push(n);
       }
     }
@@ -613,7 +627,8 @@ async function cloudSync() {
 async function cloudLoad() {
   const remote = await loadFromCloud();
   if (!remote) return;
-  const notes = remote.notes || [];
+  const deleted = readDeleted();
+  const notes = (remote.notes || []).filter(n => !deleted.includes(n.id));
   state.notes = notes;
   writeNotes(notes);
   if (Array.isArray(remote.categories) && remote.categories.length) {
